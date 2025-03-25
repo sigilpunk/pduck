@@ -1,0 +1,339 @@
+#!/bin/bash
+Help(){
+	printf "pduck 0.0.1 (bash)\n"
+	printf "\e[1mSyntax:\e[0m pduck [\e[3m-h\e[0m] <command>\n"
+	printf "\nA pico-ducky installation helper\n"
+	printf "\n\e[4mCommon Commands:\e[0m\n"
+	printf "  \e[1mbuild \e[0m- build/gather files needed for installation\n"
+	printf "  \e[1minstall \e[0m- installs the files to your pico device\n"
+	printf "  \e[1mauto \e[0m- runs build and install in conjunction\n"
+}
+
+Help-build(){
+	printf "pduck 0.0.1 (bash)\n"
+	printf "\e[1mSyntax:\e[0m pduck build [\e[3m<options>\e[0m]\n"
+	printf "\n  -h                show this help message and exit"
+	printf "\n  -d <directory>    directory to which the gathered files will end up"
+	printf "\n  -W                build with Pico W support"
+	# printf "\n  -S                skip downloading files (used for debugging)"
+}
+Help-install(){
+	printf "pduck 0.0.1 (bash)\n"
+	printf "\e[1mSyntax:\e[0m pduck install -d <directory> [\e[3m<options>\e[0m]\n"
+	printf "\n  -h                show this help message and exit"
+	printf "\n  -d <directory>    specify directory of files built by pduck (required)"
+	printf "\n  -m <mountpoint>   specify mountpoint of device (default: /media/[username]/RPI-RP2)"
+}
+Help-auto(){
+	printf "pduck 0.0.1 (bash)\n"
+	printf "\e[1mSyntax:\e[0m pduck auto [\e[3m<options>\e[0m]\n"
+	printf "\n  -h                show this help message and exit"
+	printf "\n  -m                specify mountpoint of device (default: /media/[username]/RPI-RP2)"
+}
+
+abspath(){
+	echo "$(cd $(dirname -- "$1") >/dev/null; pwd -P)/$(basename -- "$1")"
+}
+
+if [[ -z $1 ]]; then
+	Help
+	printf "\n\e[1;31mfatal: \e[0mYou must specify a command"
+	exit 2
+fi
+
+build(){
+	pico_w=false
+	skip_download=false
+	build_dir="./pduck-build"
+	# verbose=false
+	while getopts ":hSWd:" option; do	
+		case $option in
+			h)
+				Help-build
+				exit 0
+				;;
+			# v)
+				# verbose=true
+				# ;;
+			S)
+				skip_download=true
+				;;
+			W)
+				pico_w=true
+				;;
+			d)
+				build_dir=$OPTARG
+				;;
+		   \?)
+		   		echo "Unknown option: -${OPTARG}" >&2; exit 2
+		   		;;
+		    :)
+		   		echo "Missing option argument for -${OPTARG}" >&2; exit 2
+		   		;;	
+		   	*)
+		   		echo "damn"; exit 2
+		   		;;
+		esac
+	done
+
+	if [[ $pico_w ]]; then
+		echo "Building with PicoW support..."
+	fi
+	if [[ ! $pico_w ]]; then
+		echo "Building without PicoW support..."
+	fi
+
+	if [[ $skip_download = false ]]; then
+	    # Get latest picoducky-US release
+	    echo "Getting latest picoducky-US release..."
+		picoducky_url=$(curl -s https://api.github.com/repos/dbisu/pico-ducky/releases | jq -r '.[0].assets[] | select(.name | test(".*-US\\.zip")) | .browser_download_url')
+		if [[ ! -z $picoducky_url ]]; then
+			wget  --show-progress -qO /tmp/picoducky.zip $picoducky_url
+		else
+			echo "Couldn't find target repo"
+			exit 1
+		fi
+		# mkdir /tmp/adafruit-circuitpy9x > /dev/null 2>&1 || rm -r /tmp/adafruit-circuitpy9x; mkdir /tmp/adafruit-circuitpy9x
+		if [[ -d /tmp/picoducky ]]; then
+			rm -r /tmp/picoducky
+		fi
+		echo "Done!"
+		echo "Extracting to /tmp/picoducky..."
+		mkdir /tmp/picoducky
+		unzip -oq /tmp/picoducky.zip -d /tmp/picoducky
+		rm /tmp/picoducky.zip
+		echo "Done!"
+
+		# Get latest Adafruit CircuitPython libraries
+		echo "Getting latest Adafruit CircuitPython libraries..."
+		cpylib_url=$(curl -s https://api.github.com/repos/adafruit/Adafruit_CircuitPython_Bundle/releases | jq -r '.[0].assets[] | select(.name | test(".*-9\\.x.*")) | .browser_download_url')
+		# mkdir /tmp/adafruit-circuitpy9x 2&>/dev/null || rm -r /tmp/adafruit-circuitpy9x; mkdir /tmp/adafruit-circuitpy9x
+		if [[ ! -z $cpylib_url ]]; then
+			wget  --show-progress -qO /tmp/adafruit-circuitpy9x.zip $cpylib_url
+		else
+			echo "Couldn't find target repo"
+			exit 1
+		fi
+		echo "Extracting to /tmp/adafruit-circuitpy9x..."
+		unzip -oq /tmp/adafruit-circuitpy9x.zip -d /tmp/
+		rm /tmp/adafruit-circuitpy9x.zip
+		echo "Done!"
+
+		# Copy needed files to the picoducky dir
+		# mkdir /tmp/picoducky/lib/adafruit_hid 2&>/dev/null || rm -r /tmp/picoducky/lib/adafruit_hid; mkdir /tmp/picoducky/lib/adafruit_hid
+		echo "Gathering needed libraries..."
+		cp -r /tmp/adafruit-circuitpython-bundle-9*/lib/{adafruit_hid,asyncio,adafruit_wsgi} /tmp/picoducky/lib/
+		cp /tmp/adafruit-circuitpython-bundle-9*/lib/adafruit_{debouncer,ticks}.mpy /tmp/picoducky/lib/
+		echo "Done!"
+	fi
+
+	# Build final directory
+	echo "Building to ${build_dir}..."
+	if [[ ! -d $build_dir ]]; then
+		mkdir "$build_dir"
+	else
+		read -p "Directory ${build_dir} already exists. Overwrite? [y/N] " -r
+		if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+			printf "\nAborted."
+			exit 0
+		fi
+		printf "\n"
+	fi
+
+	cp -r /tmp/picoducky/lib $build_dir/
+	cp /tmp/picoducky/{boot,code,webapp,wsgiserver,duckyinpython}.py $build_dir/
+	if [[ pico_w ]]; then
+		ssid="picoducky"
+		password="1234567"
+		read -r -p "What SSID do you want picoducky to broadcast? (default: picoducky): "
+		if [[ ! -z $REPLY ]]; then
+			ssid=$REPLY
+		fi
+		read -r -p "Password (default: 1234567): "
+		if [[ ! -z $REPLY ]]; then
+			password=$REPLY
+		fi
+		echo "{\"ssid\": \"${ssid}\", \"password\": \"${password}\"}" > $build_dir/secrets.py
+	fi
+
+	# Cleaning up
+	echo "Cleaning up..."
+	rm -r /tmp/{adafruit-circuitpython-bundle-9*,picoducky}
+	echo "Succesfully built to $build_dir"
+}
+install(){
+	pico_w=false
+	mountpoint="/media/${USER}/RPI-RP2"
+	build_dir=""
+	no_copy=false
+	while getopts "hWNm:d:" option; do
+		case $option in
+			h)
+				Help-install
+				exit 0
+				;;
+			W)
+				pico_w=true
+				;;
+			N)
+				no_copy=true
+				;;
+			m)
+				mountpoint=$OPTARG
+				;;
+			d)
+				build_dir=$OPTARG
+				;;
+		   \?)
+		   		echo "Unknown option: -${OPTARG}" >&2; exit 2
+		   		;;
+		    :)
+		   		echo "Missing option argument for -${OPTARG}" >&2; exit 2
+		   		;;	
+		   	*)
+		   		echo "damn"; exit 2
+		   		;;
+		esac
+	done
+	if [[ -z $build_dir ]] && [[ ! $no_copy ]]; then
+		printf "\n\e[1;31mfatal: \e[0mYou must specify a pduck directory"
+		exit 2;
+	fi
+	echo "Waiting for device to be attached in BOOTSEL mode..."
+	until [ "$(lsusb -d 2e8a:0003)" ]; do
+		:
+	done
+	echo "Device found!"
+	echo "Waiting for device to mount..."
+	until [ -d "$mountpoint" ]; do
+		:
+	done
+	echo "Device mounted"
+	sleep 2
+	echo "Nuking device..."
+	if ! curl -s https://raw.githubusercontent.com/dwelch67/raspberrypi-pico/refs/heads/main/flash_nuke.uf2 > "$mountpoint/nuke.uf2";then
+		echo "Error flashing the device"
+		exit 1
+	fi
+	echo "Done!"
+	sleep 2
+	echo "Waiting for device to reattach..."
+	until [ "$(lsusb -d 2e8a:0003)" ]; do
+		:
+	done
+	echo "Device found!"
+	echo "Waiting for device to mount..."
+	until [ -d "$mountpoint" ]; do
+		:
+	done
+	sleep 3
+	echo "Flashing device..."
+	if [ $pico_w ]; then
+		if ! curl -s "https://downloads.circuitpython.org/bin/raspberry_pi_pico/en_US/adafruit-circuitpython-raspberry_pi_pico-en_US-9.2.4.uf2" > "$mountpoint/firmware.uf2"; then
+			echo "Error flashing the device"
+			exit 1
+		fi
+	else
+		if ! curl -s "https://downloads.circuitpython.org/bin/raspberry_pi_pico_w/en_US/adafruit-circuitpython-raspberry_pi_pico_w-en_US-9.2.4.uf2" > "$mountpoint/firmware.uf2"; then
+			echo "Error flashing the device"
+			exit 1
+		fi
+	fi
+	echo "Done!"
+	echo "Waiting for device to remount..."
+	until [ "$(lsusb -d 239a:)" ];do
+		:
+	done
+	echo "Done!"
+	sleep 2
+	if [ ! $no_copy ]; then
+		echo "Copying files..."
+		rm "$(abspath $(dirname $mountpoint)/CIRCUITPY)/code.py"
+		rm "$(abspath $(dirname $mountpoint)/CIRCUITPY)/settings.toml"
+		rm -rf "$(abspath $(dirname $mountpoint)/CIRCUITPY)/sd"
+		cp -r "$(abspath $build_dir)/." "$(abspath $(dirname $mountpoint)/CIRCUITPY)/"
+		echo "Done!"
+	fi
+}
+auto(){
+	pico_w=false
+	mountpoint="/media/${USER}/RPI-RP2"
+	build_dir="/tmp/pduck-build"
+	while getopts "hWm:" option; do
+		case $option in
+			h)
+				Help-auto
+				exit 0
+				;;
+			# v)
+				# verbose=true
+				# ;;
+			W)
+				pico_w=true
+				;;
+			m)
+				mountpoint=$OPTARG
+				;;
+		   \?)
+		   		echo "Unknown option: -${OPTARG}" >&2; exit 2
+		   		;;
+		    :)
+		   		echo "Missing option argument for -${OPTARG}" >&2; exit 2
+		   		;;	
+		   	*)
+		   		echo "damn"; exit 2
+		   		;;
+		esac
+	done
+	if [[ -z $build_dir ]]; then
+		printf "\n\e[1;31mfatal: \e[0mYou must specify a pduck directory"
+		exit 2;
+	fi
+	install -N
+	if [[ $pico_w ]]; then
+		build -W -d /tmp/pduck-build
+	else
+		build -d /tmp/pduck-build
+	fi
+	echo "Copying files..."
+	rm "$(abspath $(dirname $mountpoint)/CIRCUITPY)/code.py"
+	rm "$(abspath $(dirname $mountpoint)/CIRCUITPY)/settings.toml"
+	rm -rf "$(abspath $(dirname $mountpoint)/CIRCUITPY)/sd"
+	cp -r "$(abspath $build_dir)/." "$(abspath $(dirname $mountpoint)/CIRCUITPY)/"
+	echo "Done!"
+}
+
+main(){
+	while getopts ":h" option; do
+		case $option in
+		h)
+			Help
+			exit 0
+			;;
+		esac
+	done
+
+	case $1 in
+		"build")
+			shift
+			build $@
+			exit 0
+			;;
+		"install")
+			shift
+			install $@
+			exit 0
+			;;
+		"auto")
+			shift
+			auto $@
+			exit 0
+			;;
+		*)
+			Help
+			printf "\n\e[1;31mfatal: \e[0mYou must specify a command"
+			exit 2
+	esac
+}
+
+main $@
